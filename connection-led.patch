@@ -1,0 +1,64 @@
+diff --git a/src/pico_switch_platform.c b/src/pico_switch_platform.c
+index bf5b87c..3fb77e0 100644
+--- a/src/pico_switch_platform.c
++++ b/src/pico_switch_platform.c
+@@ -1,5 +1,7 @@
+ #include <stdio.h>
+ #include <string.h>
++#include <btstack_run_loop.h>
++#include <hardware/gpio.h>
+ 
+ #include <pico/cyw43_arch.h>
+ #include <pico/multicore.h>
+@@ -20,6 +22,29 @@
+ 
+ #define AXIS_DEADZONE 0xa
+ 
++// LED-only prototype: GP15 -> 470 ohm -> LED anode; cathode -> GND.
++// No Pi power-state detection: do NOT connect this output to Pi Power yet.
++#define CONNECTION_LED_GPIO 15
++#define CONNECTION_LED_PULSE_MS 200
++static btstack_timer_source_t connection_led_timer;
++static bool connection_led_timer_active;
++
++static void connection_led_timeout(btstack_timer_source_t *timer) {
++    (void)timer;
++    gpio_put(CONNECTION_LED_GPIO, 0);
++    connection_led_timer_active = false;
++}
++
++// Called on the Bluetooth run-loop thread, as is the timer callback.
++static void connection_led_pulse(void) {
++    if (connection_led_timer_active)
++        btstack_run_loop_remove_timer(&connection_led_timer);
++    gpio_put(CONNECTION_LED_GPIO, 1);
++    btstack_run_loop_set_timer(&connection_led_timer, CONNECTION_LED_PULSE_MS);
++    connection_led_timer_active = true;
++    btstack_run_loop_add_timer(&connection_led_timer);
++}
++
+ // Declarations
+ static void trigger_event_on_gamepad(uni_hid_device_t *d);
+ SwitchOutReport report[CONFIG_BLUEPAD32_MAX_DEVICES];
+@@ -160,6 +185,12 @@ static void pico_switch_platform_init(int argc, const char** argv) {
+ 
+     logi("my_platform: init()\n");
+ 
++    gpio_init(CONNECTION_LED_GPIO);
++    gpio_put(CONNECTION_LED_GPIO, 0);
++    gpio_set_dir(CONNECTION_LED_GPIO, GPIO_OUT);
++    connection_led_timer_active = false;
++    btstack_run_loop_set_timer_handler(&connection_led_timer, connection_led_timeout);
++
+ 	connected_controllers = 0;
+ 
+ 	uni_gamepad_mappings_t mappings = GAMEPAD_DEFAULT_MAPPINGS;
+@@ -229,6 +260,8 @@ static void pico_switch_platform_on_device_disconnected(uni_hid_device_t* d) {
+ static uni_error_t pico_switch_platform_on_device_ready(uni_hid_device_t* d) {
+     logi("my_platform: device ready: %p\n", d);
+ 
++    connection_led_pulse();
++
+ 	connected_controllers++;
+ 	set_led_status();
+     return UNI_ERROR_SUCCESS;
